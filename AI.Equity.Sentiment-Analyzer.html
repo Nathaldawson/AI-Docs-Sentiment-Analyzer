@@ -1,0 +1,1390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document Sentiment Analyzer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        /* Custom styles for Inter font and potential overrides if necessary, though Tailwind handles most */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Ensure textarea resize handle is visible and functional */
+        textarea {
+            resize: vertical;
+        }
+
+        /* Sentiment Gauge Specific Styles */
+        .sentiment-gauge-container {
+            position: relative;
+            width: 300px; /* Base width for the gauge */
+            height: 150px; /* Half of width for semi-circle */
+            margin: 0 auto;
+            overflow: hidden; /* Hide the bottom half of the circle */
+            border-radius: 150px 150px 0 0; /* Top half of a circle */
+            /* This is the key: conic gradient from bottom center, sweeping 180 degrees */
+            background: conic-gradient(
+                from -90deg at 50% 100%, /* Start at left (-90deg from top), at bottom center */
+                #EF4444 0deg 60deg,       /* Red section (0 to 60 degrees of the 180deg arc) */
+                #F59E0B 60deg 120deg,     /* Amber section (60 to 120 degrees) */
+                #10B981 120deg 180deg     /* Green section (120 to 180 degrees) */
+            );
+            border: 2px solid #ccc; /* Subtle outer border */
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1); /* Inner shadow for depth */
+        }
+
+        .sentiment-gauge-needle {
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            width: 2px; /* Thinner needle */
+            height: 140px; /* Slightly longer to reach the arc */
+            background-color: #3B82F6; /* Blue needle */
+            transform-origin: bottom center;
+            transform: translateX(-50%) rotate(0deg); /* Initial rotation (straight up, 0 degrees) */
+            transition: transform 1.5s cubic-bezier(0.25, 0.1, 0.25, 1.0); /* Smooth animation */
+            z-index: 2;
+            border-radius: 1px 1px 0 0; /* Sharper top */
+        }
+
+        .sentiment-gauge-labels {
+            position: absolute;
+            width: 100%;
+            bottom: 0; /* Position at the bottom of the container */
+            height: 30px; /* Give it some height for positioning */
+            display: flex;
+            justify-content: space-between;
+            padding: 0 15px;
+            z-index: 3;
+            font-weight: bold;
+            color: #4B5563;
+            align-items: flex-end; /* Align items to the bottom */
+        }
+        .sentiment-gauge-labels span:nth-child(1) { color: #EF4444; } /* Bearish */
+        .sentiment-gauge-labels span:nth-child(2) {
+            color: #F59E0B;
+            position: absolute; /* Take out of flex flow */
+            left: 50%;
+            transform: translateX(-50%); /* Center it */
+            bottom: 0; /* Align with others */
+        }
+        .sentiment-gauge-labels span:nth-child(3) { color: #10B981; } /* Bullish */
+
+        .sentiment-score-display {
+            position: absolute;
+            bottom: 10px; /* Position it above the labels, slightly up from the pivot */
+            left: 50%;
+            transform: translateX(-50%); /* Center horizontally */
+            font-size: 2.5rem;
+            font-weight: bold;
+            /* color will be set dynamically by JS */
+            z-index: 3;
+            background-color: white;
+            padding: 5px 10px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            min-width: 70px; /* Ensure enough space for 3 digits */
+            text-align: center;
+        }
+    </style>
+</head>
+<body class="font-sans antialiased bg-gray-50 text-gray-800 leading-relaxed">
+
+    <div id="loadingOverlay" class="hidden fixed inset-0 bg-white bg-opacity-90 z-[1000] flex justify-center items-center flex-col backdrop-blur-sm rounded-none">
+        <div class="spinner border-8 border-gray-200 border-t-8 border-blue-600 rounded-full w-16 h-16 animate-spin"></div>
+        <p id="loadingMessage" class="mt-5 text-xl text-gray-800 font-bold">Analyzing your document...</p>
+        <div class="progress-bar-container w-64 h-3 bg-gray-200 rounded-full mt-4 overflow-hidden">
+            <div id="progressBar" class="w-0 h-full bg-green-500 rounded-full transition-all duration-500 ease-in-out"></div>
+        </div>
+    </div>
+
+    <div class="container max-w-4xl mx-auto my-8 p-6 bg-white rounded-xl shadow-lg">
+        <div class="api-key-input-container mb-8 p-6 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl shadow-xl border border-blue-200">
+            <label for="apiKeyInput" class="block text-blue-800 text-lg font-bold mb-3 flex items-center">
+                <i class="fas fa-key mr-3 text-blue-600 text-2xl"></i>Gemini API Key (Optional)
+            </label>
+            <input type="password" id="apiKeyInput" placeholder="Enter your Gemini API Key here (e.g., AIzaSy...)"
+                   class="w-full px-5 py-3 border border-blue-300 rounded-lg focus:outline-none focus:ring-4 focus:ring-blue-300 focus:border-blue-500 text-gray-800 shadow-sm transition-all duration-200 ease-in-out">
+            <p class="text-blue-600 text-sm mt-3">
+                <i class="fas fa-info-circle mr-1"></i>Leave blank to use the default key provided by the environment (if available).
+            </p>
+        </div>
+
+        <header class="text-center pb-5 border-b border-gray-200 mb-8">
+            <h1 class="text-blue-600 text-5xl mb-2 font-extrabold rounded-none">AI Document Sentiment Analyzer✨</h1>
+            <p class="text-gray-600 text-lg rounded-none">Uncover the emotional tone and key insights from your reports and documents in seconds.</p>
+        </header>
+
+        <section class="mb-10 p-6 border border-gray-200 rounded-xl bg-gray-50">
+            <h2 class="text-blue-600 text-4xl text-center mb-8 font-bold rounded-none">Input Your Document or Text</h2>
+            <div class="input-options flex flex-wrap gap-5 mb-5">
+                <div id="singleFileUploadCard" class="flex-1 min-w-[300px] border-2 border-dashed border-green-500 p-6 text-center rounded-lg cursor-pointer transition-all duration-300 ease-in-out flex flex-col items-center justify-center hover:bg-green-50 hover:border-green-600">
+                    <input type="file" id="singleDocumentUpload" accept=".pdf,.docx,.txt" class="hidden">
+                    <i class="fas fa-file-upload text-5xl text-green-600 mb-3 rounded-none"></i>
+                    <label for="singleDocumentUpload" class="text-xl text-green-600 font-semibold rounded-none">Upload Single Doc</label>
+                    <p class="text-gray-500 mt-1 rounded-none">Supported: PDF, DOCX, TXT</p>
+                    <p id="singleFileNameDisplay" class="font-bold mt-2 text-blue-600 rounded-none"></p>
+                </div>
+                <div id="multiFileUploadCard" class="flex-1 min-w-[300px] border-2 border-dashed border-purple-500 p-6 text-center rounded-lg cursor-pointer transition-all duration-300 ease-in-out flex flex-col items-center justify-center hover:bg-purple-50 hover:border-purple-600">
+                    <input type="file" id="multipleDocumentUpload" accept=".pdf,.docx,.txt" multiple class="hidden">
+                    <i class="fas fa-folder-open text-5xl text-purple-600 mb-3 rounded-none"></i>
+                    <label for="multipleDocumentUpload" class="text-xl text-purple-600 font-semibold rounded-none">Upload Multiple Docs</label>
+                    <p class="text-gray-500 mt-1 rounded-none">Compare sentiment across documents</p>
+                    <ul id="uploadedFilesList" class="text-sm text-gray-700 mt-2 list-disc list-inside text-left hidden"></ul>
+                </div>
+            </div>
+
+            <textarea id="textInputArea" placeholder="Or paste your text here for analysis..." class="w-full min-h-[200px] border border-gray-300 rounded-lg p-4 text-base resize-y mt-5 shadow-inner hidden"></textarea>
+
+            <div class="action-buttons flex gap-4 mt-6 justify-center flex-wrap">
+                <button id="analyzeButton" class="px-6 py-3 bg-blue-600 text-white rounded-lg text-lg cursor-pointer transition-all duration-300 ease-in-out flex items-center gap-2 shadow-md hover:bg-blue-700 hover:scale-105">
+                    <i class="fas fa-chart-line rounded-none"></i> Analyze Sentiment
+                </button>
+                <button id="summarizeButton" class="px-6 py-3 bg-purple-600 text-white rounded-lg text-lg cursor-pointer transition-all duration-300 ease-in-out flex items-center gap-2 shadow-md hover:bg-purple-700 hover:scale-105 hidden">
+                    <i class="fas fa-file-alt rounded-none"></i> Summarize Document ✨
+                </button>
+                <button id="extractThemesButton" class="px-6 py-3 bg-indigo-600 text-white rounded-lg text-lg cursor-pointer transition-all duration-300 ease-in-out flex items-center gap-2 shadow-md hover:bg-indigo-700 hover:scale-105 hidden">
+                    <i class="fas fa-tags rounded-none"></i> Extract Key Themes ✨
+                </button>
+                <button id="exportResultsButton" class="px-6 py-3 bg-green-600 text-white rounded-lg text-lg cursor-pointer transition-all duration-300 ease-in-out flex items-center gap-2 shadow-md hover:bg-green-700 hover:scale-105 hidden">
+                    <i class="fas fa-download rounded-none"></i> Export Results
+                </button>
+                <button id="clearAnalysisButton" class="px-6 py-3 bg-red-600 text-white rounded-lg text-lg cursor-pointer transition-all duration-300 ease-in-out flex items-center gap-2 shadow-md hover:bg-red-700 hover:scale-105 hidden">
+                    <i class="fas fa-redo rounded-none"></i> Clear Analysis
+                </button>
+            </div>
+
+            <div id="messageBox" class="mt-5 p-4 rounded-lg font-bold text-center hidden"></div>
+        </section>
+
+        <section id="analysisResults" class="hidden mt-8 pt-5 border-t border-gray-200">
+            <h2 class="text-blue-600 text-4xl text-center mb-8 font-bold rounded-none">Sentiment Analysis Report</h2>
+
+            <div class="sentiment-summary flex justify-around text-center mb-8 gap-5 flex-wrap">
+                <div class="sentiment-card bullish flex-1 min-w-[220px] p-6 rounded-lg shadow-md transition-transform duration-300 ease-in-out flex flex-col items-center hover:scale-105 bg-green-50 border-l-8 border-green-500">
+                    <h3 class="mt-0 text-3xl text-gray-800 mb-4 font-bold rounded-none">Bullish</h3>
+                    <div id="bullishScore" class="score text-6xl font-extrabold mb-3 text-green-600 rounded-none">--%</div>
+                    <p class="text-gray-600 text-base rounded-none">Strongly positive sentiment, indicating growth, opportunity, or favorable conditions.</p>
+                </div>
+                <div class="sentiment-card neutral flex-1 min-w-[220px] p-6 rounded-lg shadow-md transition-transform duration-300 ease-in-out flex flex-col items-center hover:scale-105 bg-amber-50 border-l-8 border-amber-500">
+                    <h3 class="mt-0 text-3xl text-gray-800 mb-4 font-bold rounded-none">Neutral</h3>
+                    <div id="neutralScore" class="score text-6xl font-extrabold mb-3 text-amber-600 rounded-none">--%</div>
+                    <p class="text-gray-600 text-base rounded-none">Balanced or objective tone, without significant positive or negative bias.</p>
+                </div>
+                <div class="sentiment-card bearish flex-1 min-w-[220px] p-6 rounded-lg shadow-md transition-transform duration-300 ease-in-out flex flex-col items-center hover:scale-105 bg-red-50 border-l-8 border-red-500">
+                    <h3 class="mt-0 text-3xl text-gray-800 mb-4 font-bold rounded-none">Bearish</h3>
+                    <div id="bearishScore" class="score text-6xl font-extrabold mb-3 text-red-600 rounded-none">--%</div>
+                    <p class="text-gray-600 text-base rounded-none">Negative sentiment, suggesting potential risks, decline, or an unfavorable outlook.</p>
+                </div>
+            </div>
+
+            <div class="flex flex-col items-center justify-center my-10 p-6 bg-blue-50 rounded-lg shadow-inner border border-dashed border-blue-400">
+                <h3 class="text-blue-600 mb-6 text-2xl font-bold rounded-none">Overall Sentiment Meter</h3>
+                <div id="sentimentGaugeContainer" class="sentiment-gauge-container">
+                    <div class="sentiment-gauge-needle" id="sentimentGaugeNeedle"></div>
+                    <div class="sentiment-gauge-labels">
+                        <span>Bearish</span>
+                        <span>Neutral</span>
+                        <span>Bullish</span>
+                    </div>
+                    <div class="sentiment-score-display" id="sentimentScoreDisplay">--</div>
+                </div>
+                <p class="text-gray-600 text-sm mt-4 text-center">From (Strongly Bearish) 1 to 100 (Strongly Bullish)</p>
+            </div>
+
+
+            <div class="key-metrics mt-10">
+                <h3 class="text-blue-600 text-2xl mb-6 text-center font-bold rounded-none">Key Metrics & Insights</h3>
+                <div class="metric-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                        <h4 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Overall Sentiment Score</h4>
+                        <p id="overallSentimentScore" class="text-gray-600 text-sm rounded-none"><strong>Score: N/A</strong> - A composite score reflecting the document's general emotional tone. (e.g., -1.0 to 1.0)</p>
+                    </div>
+                    <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                        <h4 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Positive Word Count</h4>
+                        <p id="positiveWordCount" class="text-gray-600 text-sm rounded-none"><strong>Count: N/A</strong> - Number of words identified with a positive connotation. (e.g., "growth", "success")</p>
+                    </div>
+                    <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                        <h4 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Negative Word Count</h4>
+                        <p id="negativeWordCount" class="text-gray-600 text-sm rounded-none"><strong>Count: N/A</strong> - Number of words identified with a negative connotation. (e.g., "risk", "decline")</p>
+                    </div>
+                    <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                        <h4 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Neutral Word Count</h4>
+                        <p id="neutralWordCount" class="text-gray-600 text-sm rounded-none"><strong>Count: N/A</strong> - Number of words identified as neutral. These typically don't carry strong emotional weight.</p>
+                    </div>
+                    <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                        <h4 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Polarity Strength</h4>
+                        <p id="polarityStrength" class="text-gray-600 text-sm rounded-none"><strong>Strength: N/A</strong> - Measures how strong the sentiment is, regardless of positive or negative direction. Higher values mean stronger sentiment.</p>
+                    </div>
+                    <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                        <h4 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Subjectivity Score</h4>
+                        <p id="subjectivityScore" class="text-gray-600 text-sm rounded-none"><strong>Score: N/A</strong> - Indicates how subjective or objective the document is. Higher score means more opinion-based content. (e.g., 0.0 to 1.0)</p>
+                    </div>
+                    <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                        <h4 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Key Phrases (Bullish)</h4>
+                        <p id="bullishKeyPhrases" class="text-gray-600 text-sm rounded-none"><strong>Phrases: N/A</strong> - Short phrases or keywords that strongly contribute to the positive sentiment.</p>
+                    </div>
+                    <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                        <h4 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Key Phrases (Bearish)</h4>
+                        <p id="bearishKeyPhrases" class="text-gray-600 text-sm rounded-none"><strong>Phrases: N/A</strong> - Short phrases or keywords that strongly contribute to the negative sentiment.</p>
+                    </div>
+                     <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                        <h4 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Emotional Tone Breakdown</h4>
+                        <p id="emotionalTone" class="text-gray-600 text-sm rounded-none"><strong>Tones: N/A</strong> - Detailed breakdown of emotions detected (e.g., Joy, Sadness, Anger, Fear, Trust, Surprise, Disgust).</p>
+                    </div>
+                    <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                        <h4 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Readability Score</h4>
+                        <p id="readabilityScore" class="text-gray-600 text-sm rounded-none"><strong>Score: N/A</strong> - Assesses the ease of understanding the text. (e.g., Flesch-Kincaid Grade Level)</p>
+                    </div>
+                    <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                        <h4 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Word Count</h4>
+                        <p id="totalWordCount" class="text-gray-600 text-sm rounded-none"><strong>Count: N/A</strong> - Total number of words in the analyzed document/text.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div id="summarySection" class="hidden mt-10 p-8 bg-green-50 rounded-lg text-gray-800 border border-dashed border-green-400">
+                <h3 class="text-green-600 mb-4 text-2xl font-bold rounded-none">Document Summary ✨</h3>
+                <p id="documentSummary" class="text-lg leading-relaxed rounded-none">Summary will appear here.</p>
+            </div>
+
+            <div id="themesSection" class="hidden mt-10 p-8 bg-purple-50 rounded-lg text-gray-800 border border-dashed border-purple-400">
+                <h3 class="text-purple-600 mb-4 text-2xl font-bold rounded-none">Key Themes ✨</h3>
+                <ul id="keyThemesList" class="list-disc list-inside text-lg leading-relaxed rounded-none">
+                    <li>Themes will appear here.</li>
+                </ul>
+            </div>
+            <div class="word-cloud-placeholder mt-10 p-8 bg-blue-50 rounded-lg text-center text-gray-600 border border-dashed border-blue-400">
+                <h3 class="text-blue-600 mb-4 text-2xl font-bold rounded-none">Key Terms Word Cloud</h3>
+                <div class="min-h-[150px] flex items-center justify-center italic text-gray-500 rounded-none">
+                    (Word cloud of significant positive/negative terms will be displayed here, or a list of key terms if a word cloud library is not integrated)
+                </div>
+            </div>
+
+            <div class="raw-text-preview mt-10 p-6 bg-gray-50 border border-dashed border-gray-300 rounded-lg">
+                <h3 class="text-blue-600 mb-4 text-xl font-bold rounded-none">Document Text Preview</h3>
+                <textarea id="documentTextPreview" readonly placeholder="Raw text content of your uploaded document or pasted text will appear here..." class="w-full min-h-[150px] border border-gray-300 rounded-md p-3 font-mono text-sm resize-y bg-white shadow-inner"></textarea>
+            </div>
+        </section>
+
+        <section id="comparisonResultsSection" class="hidden mt-8 pt-5 border-t border-gray-200">
+            <h2 class="text-blue-600 text-4xl text-center mb-8 font-bold rounded-none">Sentiment Comparison Overview ✨</h2>
+            <div id="comparisonResultsTable" class="overflow-x-auto mb-8">
+                <table class="min-w-full bg-white border border-gray-200 rounded-lg">
+                    <thead>
+                        <tr class="bg-gray-100">
+                            <th class="py-2 px-4 border-b text-left text-sm font-semibold text-gray-700">Document</th>
+                            <th class="py-2 px-4 border-b text-left text-sm font-semibold text-gray-700">Overall Sentiment</th>
+                            <th class="py-2 px-4 border-b text-left text-sm font-semibold text-gray-700">Sentiment Score</th>
+                            <th class="py-2 px-4 border-b text-left text-sm font-semibold text-gray-700">Positive %</th>
+                            <th class="py-2 px-4 border-b text-left text-sm font-semibold text-gray-700">Neutral %</th>
+                            <th class="py-2 px-4 border-b text-left text-sm font-semibold text-gray-700">Negative %</th>
+                        </tr>
+                    </thead>
+                    <tbody id="comparisonResultsBody">
+                        </tbody>
+                </table>
+            </div>
+            <p id="comparisonSummary" class="mt-4 text-lg font-semibold text-center"></p>
+        </section>
+
+        <div id="individualAnalysisReportsContainer" class="mt-8 pt-5 border-t border-gray-200 hidden">
+            <h2 class="text-blue-600 text-4xl text-center mb-8 font-bold rounded-none">Detailed Document Reports</h2>
+            </div>
+
+        <section class="history-section mt-10 p-6 border border-gray-200 rounded-xl bg-gray-50">
+            <h2 class="text-blue-600 text-3xl text-center mb-5 font-bold rounded-none">Recent Analysis History</h2>
+            <ul id="analysisHistoryList" class="list-none p-0 max-h-72 overflow-y-auto border border-gray-200 rounded-lg bg-white">
+                <li class="p-3 text-gray-600 text-center rounded-none">No recent analyses yet.</li>
+            </ul>
+        </section>
+
+        <section class="about-section mt-10 p-6 border border-gray-200 rounded-xl bg-gray-50">
+            <h2 class="text-blue-600 text-3xl text-center mb-5 font-bold rounded-none">About This Tool</h2>
+            <p class="text-gray-600 mb-4 rounded-none">This Document Sentiment Analyzer helps you quickly grasp the overall emotional tone of your reports, articles, or any text. It categorizes sentiment into Bullish (positive), Neutral, and Bearish (negative), providing key metrics and insights to aid your understanding.</p>
+            <p class="text-gray-600 mb-4 rounded-none">This tool leverages LLMs and AI using the Gemini API for sentiment analysis, offering a powerful way to understand the underlying emotions in your documents.</p>
+            <p class="text-gray-600 mb-4 rounded-none"><strong>Disclaimer:</strong> Use results as a guide, not as definitive financial or strategic advice.</p>
+        </section>
+    </div>
+
+    <footer class="text-center p-6 mt-10 border-t border-gray-200 text-gray-500 text-sm">
+        <p>&copy; 2025 Document Sentiment Analyzer. All rights reserved. | Built with a little Sentiment in Mind</p>
+        <p>Developed by <a href="https://github.com/Nathaldawson" target="_blank" class="text-blue-600 hover:underline">Nathal Dawson</a></p>
+    </footer>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Document Elements
+            const apiKeyInput = document.getElementById('apiKeyInput'); // New: API Key input
+            const singleDocumentUpload = document.getElementById('singleDocumentUpload');
+            const singleFileUploadCard = document.getElementById('singleFileUploadCard');
+            const singleFileNameDisplay = document.getElementById('singleFileNameDisplay');
+
+            const multipleDocumentUpload = document.getElementById('multipleDocumentUpload');
+            const multiFileUploadCard = document.getElementById('multiFileUploadCard');
+            const uploadedFilesList = document.getElementById('uploadedFilesList');
+
+            const textInputArea = document.getElementById('textInputArea');
+            const analyzeButton = document.getElementById('analyzeButton');
+            const summarizeButton = document.getElementById('summarizeButton');
+            const extractThemesButton = document.getElementById('extractThemesButton');
+            const exportResultsButton = document.getElementById('exportResultsButton');
+            const clearAnalysisButton = document.getElementById('clearAnalysisButton');
+            const analysisResultsSection = document.getElementById('analysisResults'); // For single doc
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            const loadingMessage = document.getElementById('loadingMessage');
+            const progressBar = document.getElementById('progressBar');
+            const messageBox = document.getElementById('messageBox');
+            const analysisHistoryList = document.getElementById('analysisHistoryList');
+            const documentSummary = document.getElementById('documentSummary'); // For single doc summary
+            const summarySection = document.getElementById('summarySection'); // For single doc summary section
+            const keyThemesList = document.getElementById('keyThemesList'); // For single doc themes
+            const themesSection = document.getElementById('themesSection'); // For single doc themes section
+            const comparisonResultsSection = document.getElementById('comparisonResultsSection'); // Multi-doc overview table
+            const comparisonResultsBody = document.getElementById('comparisonResultsBody'); // Multi-doc table body
+            const comparisonSummary = document.getElementById('comparisonSummary'); // Multi-doc summary text
+            const individualAnalysisReportsContainer = document.getElementById('individualAnalysisReportsContainer'); // New: Container for multiple detailed reports
+
+            // Sentiment Gauge Elements (for single document view)
+            const sentimentGaugeNeedle = document.getElementById('sentimentGaugeNeedle');
+            const sentimentScoreDisplay = document.getElementById('sentimentScoreDisplay');
+
+            // Sentiment scores and metrics display elements (for single doc view - these will be cloned for multi-doc)
+            const bullishScore = document.getElementById('bullishScore');
+            const neutralScore = document.getElementById('neutralScore');
+            const bearishScore = document.getElementById('bearishScore');
+            const overallSentimentScore = document.getElementById('overallSentimentScore');
+            const positiveWordCount = document.getElementById('positiveWordCount');
+            const negativeWordCount = document.getElementById('negativeWordCount');
+            const neutralWordCount = document.getElementById('neutralWordCount');
+            const polarityStrength = document.getElementById('polarityStrength');
+            const subjectivityScore = document.getElementById('subjectivityScore');
+            const bullishKeyPhrases = document.getElementById('bullishKeyPhrases');
+            const bearishKeyPhrases = document.getElementById('bearishKeyPhrases');
+            const emotionalTone = document.getElementById('emotionalTone');
+            const readabilityScore = document.getElementById('readabilityScore');
+            const totalWordCount = document.getElementById('totalWordCount');
+            const documentTextPreview = document.getElementById('documentTextPreview');
+
+            let currentAnalysisData = null; // Stores the last single analysis results
+            let currentDocumentText = ''; // Stores the text of the single document being analyzed or the last one from multi-upload
+            let uploadedFiles = []; // Stores File objects for multi-upload { file: File, content: String }
+
+            // --- Utility Functions ---
+
+            /**
+             * Displays a message in the message box.
+             * @param {string} type - 'success', 'error', or 'info'.
+             * @param {string} message - The message to display.
+             */
+            function showMessage(type, message) {
+                messageBox.textContent = message;
+                messageBox.className = `mt-5 p-4 rounded-lg font-bold text-center ${type === 'success' ? 'bg-green-100 text-green-800 border border-green-300' : type === 'error' ? 'bg-red-100 text-red-800 border border-red-300' : 'bg-blue-100 text-blue-800 border border-blue-300'}`;
+                messageBox.classList.remove('hidden');
+            }
+
+            /**
+             * Shows the loading overlay with a message and progress bar.
+             * @param {string} message - The message to display during loading.
+             */
+            function showLoading(message) {
+                loadingMessage.textContent = message;
+                progressBar.style.width = '0%';
+                loadingOverlay.classList.remove('hidden');
+                loadingOverlay.style.display = 'flex'; // Ensure it's flex for centering
+            }
+
+            /**
+             * Hides the loading overlay.
+             */
+            function hideLoading() {
+                loadingOverlay.classList.add('hidden');
+                loadingOverlay.style.display = 'none';
+            }
+
+            /**
+             * Updates the progress bar.
+             * @param {number} percentage - The progress percentage (0-100).
+             * @param {string} message - Optional message to update.
+             */
+            function updateProgress(percentage, message = '') {
+                progressBar.style.width = `${percentage}%`;
+                if (message) {
+                    loadingMessage.textContent = message;
+                }
+            }
+
+            // --- Input Method Selection ---
+            singleFileUploadCard.addEventListener('click', () => {
+                singleDocumentUpload.click();
+                textInputArea.classList.add('hidden');
+                textInputArea.value = '';
+                uploadedFiles = []; // Clear multi-upload files
+                uploadedFilesList.innerHTML = '';
+                uploadedFilesList.classList.add('hidden');
+                singleFileNameDisplay.textContent = 'Ready for file upload.';
+                showMessage('info', 'Selected: Single Document Upload. Supported: PDF, DOCX, TXT.');
+                clearAllAnalysisOutputs();
+                // Enable single-doc related buttons
+                summarizeButton.classList.remove('hidden');
+                extractThemesButton.classList.remove('hidden');
+            });
+
+            multiFileUploadCard.addEventListener('click', () => {
+                multipleDocumentUpload.click();
+                textInputArea.classList.add('hidden');
+                textInputArea.value = '';
+                singleDocumentUpload.value = ''; // Clear single file input
+                singleFileNameDisplay.textContent = '';
+                showMessage('info', 'Selected: Multiple Document Upload. Compare sentiment across documents.');
+                clearAllAnalysisOutputs();
+                // Disable single-doc related buttons for multi-doc mode
+                summarizeButton.classList.add('hidden');
+                extractThemesButton.classList.add('hidden');
+            });
+
+            // --- File Upload Handling ---
+            singleFileUploadCard.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                singleFileUploadCard.classList.add('bg-blue-100', 'border-blue-600');
+            });
+
+            singleFileUploadCard.addEventListener('dragleave', () => {
+                singleFileUploadCard.classList.remove('bg-blue-100', 'border-blue-600');
+            });
+
+            singleFileUploadCard.addEventListener('drop', (e) => {
+                e.preventDefault();
+                singleFileUploadCard.classList.remove('bg-blue-100', 'border-blue-600');
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    handleSingleFile(files[0]);
+                }
+            });
+
+            singleDocumentUpload.addEventListener('change', (e) => {
+                const files = e.target.files;
+                if (files.length > 0) {
+                    handleSingleFile(files[0]);
+                }
+            });
+
+            multiFileUploadCard.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                multiFileUploadCard.classList.add('bg-blue-100', 'border-blue-600');
+            });
+
+            multiFileUploadCard.addEventListener('dragleave', () => {
+                multiFileUploadCard.classList.remove('bg-blue-100', 'border-blue-600');
+            });
+
+            multiFileUploadCard.addEventListener('drop', (e) => {
+                e.preventDefault();
+                multiFileUploadCard.classList.remove('bg-blue-100', 'border-blue-600');
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    handleMultipleFiles(Array.from(files));
+                }
+            });
+
+            multipleDocumentUpload.addEventListener('change', (e) => {
+                const files = e.target.files;
+                if (files.length > 0) {
+                    handleMultipleFiles(Array.from(files));
+                }
+            });
+
+            /**
+             * Handles a single file upload.
+             * @param {File} file - The file object.
+             */
+            function handleSingleFile(file) {
+                uploadedFiles = [{ file: file, content: '' }]; // Store as a single file in the array
+                singleFileNameDisplay.textContent = `Selected: ${file.name}`;
+                uploadedFilesList.innerHTML = '';
+                uploadedFilesList.classList.add('hidden');
+                processFileContent(file, true); // Pass true for single file processing
+                // Enable single-doc related buttons
+                summarizeButton.classList.remove('hidden');
+                extractThemesButton.classList.remove('hidden');
+            }
+
+            /**
+             * Handles multiple file uploads.
+             * @param {Array<File>} files - An array of file objects.
+             */
+            function handleMultipleFiles(files) {
+                uploadedFiles = files.map(file => ({ file: file, content: '' }));
+                singleDocumentUpload.value = ''; // Clear single file input
+                singleFileNameDisplay.textContent = '';
+                uploadedFilesList.innerHTML = '';
+                uploadedFilesList.classList.remove('hidden');
+                if (files.length > 0) {
+                    files.forEach(file => {
+                        const li = document.createElement('li');
+                        li.textContent = file.name;
+                        uploadedFilesList.appendChild(li);
+                    });
+                    showMessage('success', `${files.length} files selected for comparison.`);
+                } else {
+                    uploadedFilesList.classList.add('hidden');
+                    showMessage('info', 'No files selected for multiple document comparison.');
+                }
+                documentTextPreview.value = 'Multiple documents selected. Preview not available here.';
+                currentDocumentText = ''; // Clear currentDocumentText for multi-doc mode
+                // Disable single-doc related buttons for multi-doc mode
+                summarizeButton.classList.add('hidden');
+                extractThemesButton.classList.add('hidden');
+            }
+
+            /**
+             * Processes file content (reads TXT or sets dummy for others).
+             * @param {File} file - The file object.
+             * @param {boolean} isSingleFileMode - True if currently in single file upload mode.
+             * @returns {Promise<string>} A promise that resolves with the file content.
+             */
+            async function processFileContent(file, isSingleFileMode = false) {
+                return new Promise((resolve, reject) => {
+                    if (file.type === 'text/plain') {
+                        const reader = new FileReader();
+                        reader.onload = (e) => {
+                            const content = e.target.result;
+                            if (isSingleFileMode) {
+                                currentDocumentText = content;
+                                documentTextPreview.value = content.substring(0, 2000) + (content.length > 2000 ? '...' : '');
+                            }
+                            resolve(content);
+                        };
+                        reader.onerror = () => {
+                            const errorMsg = 'Failed to read file.';
+                            if (isSingleFileMode) {
+                                showMessage('error', errorMsg);
+                                documentTextPreview.value = errorMsg;
+                                currentDocumentText = '';
+                            }
+                            reject(new Error(errorMsg));
+                        };
+                        reader.readAsText(file);
+                    } else if (file.type === 'application/pdf' || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                        const dummyContent = `This is a placeholder text for analysis from a ${file.type.includes('pdf') ? 'PDF' : 'DOCX'} file named "${file.name}". In a real application, the content of the file would be extracted by a backend service. This document contains information about positive market trends, potential growth opportunities, and some neutral observations regarding current economic conditions. However, there are also mentions of possible challenges, risks associated with new regulations, and a bearish outlook on certain sectors due to increased competition. The overall tone is cautiously optimistic, but acknowledges significant hurdles.`;
+                        if (isSingleFileMode) {
+                            showMessage('info', `File "${file.name}" selected. For PDF/DOCX, text extraction requires a backend service. Analyzing with dummy text for demo.`);
+                            currentDocumentText = dummyContent;
+                            documentTextPreview.value = `File type: ${file.type}. Text extraction not supported client-side. Analyzing with dummy content.`;
+                        } else {
+                            // For multi-file, just show info in general message box, not for each file
+                            // showMessage('info', `Using dummy content for ${file.name} (PDF/DOCX).`);
+                        }
+                        resolve(dummyContent);
+                    } else {
+                        const errorMsg = 'Unsupported file type. Please upload a PDF, DOCX, or TXT file.';
+                        if (isSingleFileMode) {
+                            showMessage('error', errorMsg);
+                            documentTextPreview.value = errorMsg;
+                            currentDocumentText = '';
+                        }
+                        reject(new Error(errorMsg));
+                    }
+                });
+            }
+
+
+            // --- Analyze Button Click ---
+            analyzeButton.addEventListener('click', async () => {
+                let contentToAnalyze = '';
+                let inputSource = '';
+                let analysisMode = ''; // 'single' or 'multi'
+
+                if (uploadedFiles.length > 1) {
+                    analysisMode = 'multi';
+                    summarizeButton.classList.add('hidden');
+                    extractThemesButton.classList.add('hidden');
+                } else if (uploadedFiles.length === 1) {
+                    analysisMode = 'single';
+                    contentToAnalyze = currentDocumentText; // Already processed by handleSingleFile or text input
+                    inputSource = uploadedFiles[0].file.name;
+                    summarizeButton.classList.remove('hidden');
+                    extractThemesButton.classList.remove('hidden');
+                } else if (textInputArea.value.trim() !== '') {
+                    analysisMode = 'single';
+                    contentToAnalyze = textInputArea.value.trim();
+                    inputSource = 'Pasted Text';
+                    currentDocumentText = contentToAnalyze;
+                    summarizeButton.classList.remove('hidden');
+                    extractThemesButton.classList.remove('hidden');
+                } else {
+                    showMessage('error', 'Please upload document(s) or paste text to analyze.');
+                    return;
+                }
+
+                if (analysisMode === 'single' && contentToAnalyze.length < 50) {
+                    showMessage('error', 'Please provide more text for a meaningful analysis (at least 50 characters).');
+                    return;
+                }
+
+                showLoading('Starting sentiment analysis...');
+                let progress = 0;
+                const interval = setInterval(() => {
+                    progress += 10;
+                    if (progress <= 90) {
+                        updateProgress(progress, `Processing: ${progress}%`);
+                    }
+                }, 300);
+
+                try {
+                    if (analysisMode === 'single') {
+                        const analysisData = await callGeminiAPI(contentToAnalyze, 'sentiment');
+                        currentAnalysisData = analysisData;
+                        populateResults(analysisData); // Populate the main single analysis section
+                        analysisResultsSection.classList.remove('hidden');
+                        comparisonResultsSection.classList.add('hidden'); // Hide comparison section
+                        individualAnalysisReportsContainer.classList.add('hidden'); // Hide individual reports
+                        exportResultsButton.classList.remove('hidden');
+                        clearAnalysisButton.classList.remove('hidden');
+                        showMessage('success', 'Sentiment analysis complete!');
+                        addToHistory(inputSource, analysisData.overallSentiment);
+                    } else { // Multi-document analysis
+                        const allAnalysisResults = [];
+                        for (let i = 0; i < uploadedFiles.length; i++) {
+                            const fileObj = uploadedFiles[i];
+                            updateProgress(Math.floor((i / uploadedFiles.length) * 100), `Analyzing "${fileObj.file.name}"...`);
+                            
+                            // Get file content (read if TXT, use dummy if PDF/DOCX)
+                            let fileContent;
+                            try {
+                                fileContent = await processFileContent(fileObj.file, false); // Pass false for multi-file processing
+                                fileObj.content = fileContent; // Store content in uploadedFiles array
+                            } catch (error) {
+                                console.warn(`Could not process file ${fileObj.file.name}: ${error.message}`);
+                                showMessage('error', `Skipping "${fileObj.file.name}": ${error.message}`);
+                                continue; // Skip to next file
+                            }
+
+                            if (fileContent.length < 50) {
+                                showMessage('error', `Skipping "${fileObj.file.name}": Insufficient text for meaningful analysis (min 50 chars).`);
+                                continue;
+                            }
+
+                            const analysisData = await callGeminiAPI(fileContent, 'sentiment');
+                            allAnalysisResults.push({ fileName: fileObj.file.name, fileContent: fileContent, ...analysisData });
+                        }
+
+                        displayComparisonResults(allAnalysisResults); // Show overview table
+                        renderIndividualDocumentReports(allAnalysisResults); // Render detailed reports
+                        analysisResultsSection.classList.add('hidden'); // Hide single analysis section
+                        comparisonResultsSection.classList.remove('hidden'); // Show comparison section
+                        individualAnalysisReportsContainer.classList.remove('hidden'); // Show individual reports container
+                        exportResultsButton.classList.remove('hidden');
+                        clearAnalysisButton.classList.remove('hidden');
+                        showMessage('success', 'Multi-document sentiment comparison complete!');
+                        allAnalysisResults.forEach(res => addToHistory(res.fileName, res.overallSentiment));
+                    }
+                } catch (error) {
+                    clearInterval(interval);
+                    updateProgress(0);
+                    console.error('Analysis failed:', error);
+                    showMessage('error', `Analysis failed: ${error.message || 'An unexpected error occurred.'}`);
+                    analysisResultsSection.classList.add('hidden');
+                    comparisonResultsSection.classList.add('hidden');
+                    individualAnalysisReportsContainer.classList.add('hidden');
+                    summarizeButton.classList.add('hidden');
+                    extractThemesButton.classList.add('hidden');
+                } finally {
+                    hideLoading();
+                }
+            });
+
+            // --- LLM Feature: Summarize Document (for single doc view) ---
+            summarizeButton.addEventListener('click', async () => {
+                if (!currentDocumentText) {
+                    showMessage('error', 'No document text available to summarize. Please analyze a document first.');
+                    return;
+                }
+                await generateSummary(currentDocumentText, documentSummary, summarySection);
+            });
+
+            // --- LLM Feature: Extract Key Themes (for single doc view) ---
+            extractThemesButton.addEventListener('click', async () => {
+                if (!currentDocumentText) {
+                    showMessage('error', 'No document text available to extract themes from. Please analyze a document first.');
+                    return;
+                }
+                await generateThemes(currentDocumentText, keyThemesList, themesSection);
+            });
+
+            /**
+             * Generates and displays a summary for a given text.
+             * @param {string} text - The text to summarize.
+             * @param {HTMLElement} displayElement - The element to display the summary in.
+             * @param {HTMLElement} sectionElement - The section containing the display element.
+             */
+            async function generateSummary(text, displayElement, sectionElement) {
+                showLoading('Generating summary...');
+                let progress = 0;
+                const interval = setInterval(() => {
+                    progress += 10;
+                    if (progress <= 90) {
+                        updateProgress(progress, `Summarizing: ${progress}%`);
+                    }
+                }, 300);
+
+                try {
+                    const summary = await callGeminiAPI(text, 'summary');
+                    clearInterval(interval);
+                    updateProgress(100, 'Summary generated!');
+                    displayElement.textContent = summary;
+                    sectionElement.classList.remove('hidden');
+                    showMessage('success', 'Document summary generated successfully!');
+                } catch (error) {
+                    clearInterval(interval);
+                    updateProgress(0);
+                    console.error('Summary generation failed:', error);
+                    showMessage('error', `Summary generation failed: ${error.message || 'An unexpected error occurred.'}`);
+                    sectionElement.classList.add('hidden');
+                } finally {
+                    hideLoading();
+                }
+            }
+
+            /**
+             * Generates and displays key themes for a given text.
+             * @param {string} text - The text to extract themes from.
+             * @param {HTMLElement} displayListElement - The UL element to display themes in.
+             * @param {HTMLElement} sectionElement - The section containing the display element.
+             */
+            async function generateThemes(text, displayListElement, sectionElement) {
+                showLoading('Extracting key themes...');
+                let progress = 0;
+                const interval = setInterval(() => {
+                    progress += 10;
+                    if (progress <= 90) {
+                        updateProgress(progress, `Extracting themes: ${progress}%`);
+                    }
+                }, 300);
+
+                try {
+                    const themes = await callGeminiAPI(text, 'themes');
+                    clearInterval(interval);
+                    updateProgress(100, 'Themes extracted!');
+                    displayListElement.innerHTML = ''; // Clear previous themes
+                    if (themes && themes.length > 0) {
+                        themes.forEach(theme => {
+                            const li = document.createElement('li');
+                            li.textContent = theme;
+                            li.className = 'mb-1';
+                            displayListElement.appendChild(li);
+                        });
+                    } else {
+                        displayListElement.innerHTML = '<li>No specific themes could be extracted.</li>';
+                    }
+                    sectionElement.classList.remove('hidden');
+                    showMessage('success', 'Key themes extracted successfully!');
+                } catch (error) {
+                    clearInterval(interval);
+                    updateProgress(0);
+                    console.error('Theme extraction failed:', error);
+                    showMessage('error', `Theme extraction failed: ${error.message || 'An unexpected error occurred.'}`);
+                    sectionElement.classList.add('hidden');
+                } finally {
+                    hideLoading();
+                }
+            }
+
+
+            /**
+             * Centralized function to call the Gemini API for different purposes.
+             * @param {string} text - The text content to process.
+             * @param {string} type - The type of request: 'sentiment', 'summary', or 'themes'.
+             * @returns {Promise<Object|string|Array>} - A promise that resolves with the API response.
+             */
+            async function callGeminiAPI(text, type) {
+                let prompt = '';
+                let responseSchema = {};
+                let responseMimeType = "application/json";
+
+                switch (type) {
+                    case 'sentiment':
+                        prompt = `Analyze the sentiment of the following document/text. Provide a structured JSON response with the following details:
+                        - overallSentiment: "Bullish", "Neutral", or "Bearish" based on the dominant sentiment.
+                        - sentimentScores: An object with "positive" (%), "neutral" (%), and "negative" (%) percentages.
+                        - overallSentimentScore: A float score between -1.0 (most negative) and 1.0 (most positive).
+                        - wordCounts: An object with "positive" (count), "negative" (count), "count), and "total" (count).
+                        - polarityStrength: A float score between 0.0 (weak) and 1.0 (strong).
+                        - subjectivityScore: A float score between 0.0 (objective) and 1.0 (subjective).
+                        - keyPhrases: An object with "bullish" (array of strings) and "bearish" (array of strings).
+                        - emotionalTone: An object with estimated percentages or scores for emotions like "Joy", "Sadness", "Anger", "Fear", "Trust", "Surprise", "Disgust". If not possible, provide a general description.
+                        - readabilityScore: An estimated score (e.g., Flesch-Kincaid Grade Level, or a general complexity rating like "Easy", "Medium", "Complex").
+
+                        Text to analyze:
+                        "${text}"
+                        `;
+                        responseSchema = {
+                            type: "OBJECT",
+                            properties: {
+                                overallSentiment: { type: "STRING", enum: ["Bullish", "Neutral", "Bearish"] },
+                                sentimentScores: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        positive: { type: "NUMBER" },
+                                        neutral: { type: "NUMBER" },
+                                        negative: { type: "NUMBER" }
+                                    }
+                                },
+                                overallSentimentScore: { type: "NUMBER" },
+                                wordCounts: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        positive: { type: "NUMBER" },
+                                        negative: { type: "NUMBER" },
+                                        neutral: { type: "NUMBER" },
+                                        total: { type: "NUMBER" }
+                                    }
+                                },
+                                polarityStrength: { type: "NUMBER" },
+                                subjectivityScore: { type: "NUMBER" },
+                                keyPhrases: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        bullish: { type: "ARRAY", items: { type: "STRING" } },
+                                        bearish: { type: "ARRAY", items: { type: "STRING" } }
+                                    }
+                                },
+                                emotionalTone: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        Joy: { type: "NUMBER" },
+                                        Sadness: { type: "NUMBER" },
+                                        Anger: { type: "NUMBER" },
+                                        Fear: { type: "NUMBER" },
+                                        Trust: { type: "NUMBER" },
+                                        Surprise: { type: "NUMBER" },
+                                        Disgust: { type: "NUMBER" },
+                                        OverallDescription: { type: "STRING" }
+                                    }
+                                },
+                                readabilityScore: { type: "STRING" }
+                            },
+                            required: [
+                                "overallSentiment", "sentimentScores", "overallSentimentScore",
+                                "wordCounts", "polarityStrength", "subjectivityScore",
+                                "keyPhrases", "emotionalTone", "readabilityScore"
+                            ]
+                        };
+                        break;
+                    case 'summary':
+                        prompt = `Provide a concise summary of the following text, focusing on the main points and overall message. Keep it to 3-5 sentences.
+
+                        Text to summarize:
+                        "${text}"
+                        `;
+                        responseMimeType = "text/plain"; // Expect plain text response
+                        // No responseSchema for text/plain
+                        break;
+                    case 'themes':
+                        prompt = `Identify the main themes or topics discussed in the following text. Provide them as a comma-separated list of keywords or short phrases.
+
+                        Text to analyze for themes:
+                        "${text}"
+                        `;
+                        responseMimeType = "application/json"; // Expect JSON array of strings
+                        responseSchema = {
+                            type: "ARRAY",
+                            items: { type: "STRING" }
+                        };
+                        break;
+                    default:
+                        throw new Error('Invalid API call type.');
+                }
+
+                let chatHistory = [];
+                chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+
+                const payload = {
+                    contents: chatHistory,
+                    generationConfig: {
+                        responseMimeType: responseMimeType,
+                        // Only include responseSchema if responseMimeType is application/json
+                        ...(responseMimeType === "application/json" && { responseSchema: responseSchema })
+                    }
+                };
+
+                // Use the API key from the input field if provided, otherwise use the default empty string
+                const userProvidedApiKey = apiKeyInput.value.trim();
+                const apiKey = userProvidedApiKey || ""; 
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+                try {
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(`API Error: ${response.status} - ${errorData.error.message || 'Unknown error'}`);
+                    }
+
+                    const result = await response.json();
+                    if (result.candidates && result.candidates.length > 0 &&
+                        result.candidates[0].content && result.candidates[0].content.parts &&
+                        result.candidates[0].content.parts.length > 0) {
+                        const responseText = result.candidates[0].content.parts[0].text;
+
+                        if (responseMimeType === "application/json") {
+                            try {
+                                if (!responseText || responseText.trim() === '') {
+                                    console.warn("Received empty JSON response for type:", type, "Returning default.");
+                                    if (type === 'sentiment') {
+                                        return {
+                                            overallSentiment: 'Neutral',
+                                            sentimentScores: { positive: 0, neutral: 100, negative: 0 },
+                                            overallSentimentScore: 0,
+                                            wordCounts: { positive: 0, negative: 0, neutral: 0, total: 0 },
+                                            polarityStrength: 0,
+                                            subjectivityScore: 0,
+                                            keyPhrases: { bullish: [], bearish: [] },
+                                            emotionalTone: { OverallDescription: 'No specific emotional tone detected.' },
+                                            readabilityScore: 'N/A'
+                                        };
+                                    } else if (type === 'themes') {
+                                        return [];
+                                    }
+                                }
+                                return JSON.parse(responseText);
+                            } catch (parseError) {
+                                console.error("JSON parsing error:", parseError, "Response Text:", responseText);
+                                if (type === 'sentiment') {
+                                    // Return a default structure for sentiment on parse error
+                                    return {
+                                        overallSentiment: 'Neutral',
+                                        sentimentScores: { positive: 0, neutral: 100, negative: 0 },
+                                        overallSentimentScore: 0,
+                                        wordCounts: { positive: 0, negative: 0, neutral: 0, total: 0 },
+                                        polarityStrength: 0,
+                                        subjectivityScore: 0,
+                                        keyPhrases: { bullish: [], bearish: [] },
+                                        emotionalTone: { OverallDescription: 'Could not parse emotional tone.' },
+                                        readabilityScore: 'N/A'
+                                    };
+                                } else if (type === 'themes') {
+                                    console.warn("Could not parse themes JSON, returning empty array.");
+                                    return [];
+                                }
+                            }
+                        } else { // Handle text/plain response directly
+                            if (!responseText || responseText.trim() === '') {
+                                console.warn("Received empty response for summary, returning default message.");
+                                return "No summary could be generated for the provided text.";
+                            }
+                            return responseText;
+                        }
+                    } else {
+                        throw new Error('Invalid response structure from API: Missing candidates or content.');
+                    }
+                } catch (error) {
+                    console.error("Error calling Gemini API:", error);
+                    throw error;
+                }
+            }
+
+
+            /**
+             * Populates the UI with the analysis results for a single document.
+             * @param {Object} data - The analysis data from the API.
+             */
+            function populateResults(data) {
+                const sentimentScores = data.sentimentScores || {}; // Ensure it's an object
+                const positive = parseFloat(sentimentScores.positive) || 0;
+                const neutral = parseFloat(sentimentScores.neutral) || 0;
+                const negative = parseFloat(sentimentScores.negative) || 0;
+
+                // Sentiment Summary
+                bullishScore.textContent = `${positive.toFixed(1)}%`;
+                neutralScore.textContent = `${neutral.toFixed(1)}%`;
+                bearishScore.textContent = `${negative.toFixed(1)}%`;
+
+                // Update Sentiment Gauge
+                updateSentimentGauge(data.overallSentimentScore, sentimentGaugeNeedle, sentimentScoreDisplay);
+
+                // Key Metrics
+                overallSentimentScore.innerHTML = `<strong>Score: ${data.overallSentimentScore !== undefined ? parseFloat(data.overallSentimentScore).toFixed(2) : 'N/A'}</strong> - A composite score reflecting the document's general emotional tone.`;
+                positiveWordCount.innerHTML = `<strong>Count: ${data.wordCounts.positive !== undefined ? parseFloat(data.wordCounts.positive) : 'N/A'}</strong> - Number of words identified with a positive connotation.`;
+                negativeWordCount.innerHTML = `<strong><strong>Count: ${data.wordCounts.negative !== undefined ? parseFloat(data.wordCounts.negative) : 'N/A'}</strong> - Number of words identified with a negative connotation.`;
+                neutralWordCount.innerHTML = `<strong>Count: ${data.wordCounts.neutral !== undefined ? parseFloat(data.wordCounts.neutral) : 'N/A'}</strong> - Number of words identified as neutral.`;
+                polarityStrength.innerHTML = `<strong>Strength: ${data.polarityStrength !== undefined ? parseFloat(data.polarityStrength).toFixed(2) : 'N/A'}</strong> - Measures how strong the sentiment is.`;
+                subjectivityScore.innerHTML = `<strong>Score: ${data.subjectivityScore !== undefined ? parseFloat(data.subjectivityScore).toFixed(2) : 'N/A'}</strong> - Indicates how subjective or objective the document is.`;
+                bullishKeyPhrases.innerHTML = `<strong>Phrases: ${data.keyPhrases.bullish && data.keyPhrases.bullish.length > 0 ? data.keyPhrases.bullish.join(', ') : 'N/A'}</strong>`;
+                bearishKeyPhrases.innerHTML = `<strong>Phrases: ${data.keyPhrases.bearish && data.keyPhrases.bearish.length > 0 ? data.keyPhrases.bearish.join(', ') : 'N/A'}</strong>`;
+
+                let emotionalToneText = '<strong>Tones: N/A</strong>';
+                if (data.emotionalTone) {
+                    if (data.emotionalTone.OverallDescription) {
+                        emotionalToneText = `<strong>Tones: ${data.emotionalTone.OverallDescription}</strong>`;
+                    } else {
+                        const tones = Object.entries(data.emotionalTone)
+                                            .filter(([, value]) => typeof value === 'number' && value > 0)
+                                            .map(([key, value]) => `${key}: ${(parseFloat(value) * 100).toFixed(0)}%`);
+                        emotionalToneText = `<strong>Tones: ${tones.length > 0 ? tones.join(', ') : 'N/A'}</strong>`;
+                    }
+                }
+                emotionalTone.innerHTML = emotionalToneText;
+
+                readabilityScore.innerHTML = `<strong>Score: ${data.readabilityScore !== undefined ? data.readabilityScore : 'N/A'}</strong> - Assesses the ease of understanding the text.`;
+                totalWordCount.innerHTML = `<strong>Count: ${data.wordCounts.total !== undefined ? parseFloat(data.wordCounts.total) : 'N/A'}</strong> - Total number of words in the analyzed document/text.`;
+            }
+
+            /**
+             * Updates the sentiment gauge needle and score display.
+             * @param {number} overallSentimentScore - The sentiment score from -1.0 to 1.0.
+             * @param {HTMLElement} needleElement - The needle element to rotate.
+             * @param {HTMLElement} scoreDisplayElement - The element to display the score.
+             */
+            function updateSentimentGauge(overallSentimentScore, needleElement, scoreDisplayElement) {
+                // Ensure score is within -1.0 to 1.0 range
+                const clampedScore = Math.max(-1, Math.min(1, overallSentimentScore));
+
+                // Map -1.0 to 1, 0.0 to 50, 1.0 to 100
+                const score1_100 = Math.round(((clampedScore + 1) / 2) * 99) + 1; // 1 to 100
+
+                // Map -1.0 to 0 degrees, 0.0 to 90 degrees, 1.0 to 180 degrees
+                const angle = ((clampedScore + 1) / 2) * 180;
+
+                needleElement.style.transform = `translateX(-50%) rotate(${angle}deg)`;
+                scoreDisplayElement.textContent = score1_100;
+
+                // Remove existing color classes
+                scoreDisplayElement.classList.remove('text-red-600', 'text-amber-600', 'text-green-600');
+
+                // Apply new color class based on score1_100
+                if (score1_100 < 40) {
+                    scoreDisplayElement.classList.add('text-red-600');
+                } else if (score1_100 >= 40 && score1_100 <= 60) {
+                    scoreDisplayElement.classList.add('text-amber-600');
+                } else { // score1_100 > 60
+                    scoreDisplayElement.classList.add('text-green-600');
+                }
+            }
+
+
+            /**
+             * Displays comparison results for multiple documents in a table.
+             * @param {Array<Object>} results - Array of analysis results for each document.
+             */
+            function displayComparisonResults(results) {
+                comparisonResultsBody.innerHTML = ''; // Clear previous results
+                let bestSentimentDoc = null;
+                let highestPositiveScore = -Infinity;
+
+                results.forEach(doc => {
+                    const row = document.createElement('tr');
+                    let sentimentColorClass = '';
+                    if (doc.overallSentiment === 'Bullish') sentimentColorClass = 'text-green-600 font-semibold';
+                    else if (doc.overallSentiment === 'Neutral') sentimentColorClass = 'text-amber-600 font-semibold';
+                    else if (doc.overallSentiment === 'Bearish') sentimentColorClass = 'text-red-600 font-semibold';
+
+                    row.innerHTML = `
+                        <td class="py-2 px-4 border-b">${doc.fileName}</td>
+                        <td class="py-2 px-4 border-b ${sentimentColorClass}">${doc.overallSentiment}</td>
+                        <td class="py-2 px-4 border-b">${doc.overallSentimentScore !== undefined ? parseFloat(doc.overallSentimentScore).toFixed(2) : 'N/A'}</td>
+                        <td class="py-2 px-4 border-b">${doc.sentimentScores.positive !== undefined ? parseFloat(doc.sentimentScores.positive).toFixed(1) : 'N/A'}%</td>
+                        <td class="py-2 px-4 border-b">${doc.sentimentScores.neutral !== undefined ? parseFloat(doc.sentimentScores.neutral).toFixed(1) : 'N/A'}%</td>
+                        <td class="py-2 px-4 border-b">${doc.sentimentScores.negative !== undefined ? parseFloat(doc.sentimentScores.negative).toFixed(1) : 'N/A'}%</td>
+                    `;
+                    comparisonResultsBody.appendChild(row);
+
+                    // Determine the document with the "best" sentiment (most bullish)
+                    if (doc.overallSentimentScore > highestPositiveScore) {
+                        highestPositiveScore = doc.overallSentimentScore;
+                        bestSentimentDoc = doc;
+                    }
+                });
+
+                if (bestSentimentDoc) {
+                    comparisonSummary.textContent = `The document with the most positive sentiment is "${bestSentimentDoc.fileName}" (Overall Sentiment: ${bestSentimentDoc.overallSentiment}, Score: ${parseFloat(bestSentimentDoc.overallSentimentScore).toFixed(2)}).`;
+                } else {
+                    comparisonSummary.textContent = 'No clear best sentiment found among the analyzed documents.';
+                }
+            }
+
+            /**
+             * Renders individual detailed sentiment reports for multiple documents.
+             * @param {Array<Object>} results - Array of analysis results for each document.
+             */
+            function renderIndividualDocumentReports(results) {
+                individualAnalysisReportsContainer.innerHTML = '<h2 class="text-blue-600 text-4xl text-center mb-8 font-bold rounded-none">Detailed Document Reports</h2>'; // Clear and add title
+                individualAnalysisReportsContainer.classList.remove('hidden');
+
+                results.forEach((doc, index) => {
+                    const reportSection = document.createElement('section');
+                    reportSection.className = 'mt-8 pt-5 border-t border-gray-200';
+                    reportSection.innerHTML = `
+                        <h3 class="text-blue-600 text-3xl text-center mb-6 font-bold rounded-none">Report for: ${doc.fileName}</h3>
+
+                        <div class="sentiment-summary flex justify-around text-center mb-8 gap-5 flex-wrap">
+                            <div class="sentiment-card bullish flex-1 min-w-[220px] p-6 rounded-lg shadow-md transition-transform duration-300 ease-in-out flex flex-col items-center hover:scale-105 bg-green-50 border-l-8 border-green-500">
+                                <h4 class="mt-0 text-3xl text-gray-800 mb-4 font-bold rounded-none">Bullish</h4>
+                                <div class="score text-6xl font-extrabold mb-3 text-green-600 rounded-none">${(parseFloat(doc.sentimentScores.positive) || 0).toFixed(1)}%</div>
+                                <p class="text-gray-600 text-base rounded-none">Strongly positive sentiment.</p>
+                            </div>
+                            <div class="sentiment-card neutral flex-1 min-w-[220px] p-6 rounded-lg shadow-md transition-transform duration-300 ease-in-out flex flex-col items-center hover:scale-105 bg-amber-50 border-l-8 border-amber-500">
+                                <h4 class="mt-0 text-3xl text-gray-800 mb-4 font-bold rounded-none">Neutral</h4>
+                                <div class="score text-6xl font-extrabold mb-3 text-amber-600 rounded-none">${(parseFloat(doc.sentimentScores.neutral) || 0).toFixed(1)}%</div>
+                                <p class="text-gray-600 text-base rounded-none">Balanced or objective tone.</p>
+                            </div>
+                            <div class="sentiment-card bearish flex-1 min-w-[220px] p-6 rounded-lg shadow-md transition-transform duration-300 ease-in-out flex flex-col items-center hover:scale-105 bg-red-50 border-l-8 border-red-500">
+                                <h4 class="mt-0 text-3xl text-gray-800 mb-4 font-bold rounded-none">Bearish</h4>
+                                <div class="score text-6xl font-extrabold mb-3 text-red-600 rounded-none">${(parseFloat(doc.sentimentScores.negative) || 0).toFixed(1)}%</div>
+                                <p class="text-gray-600 text-base rounded-none">Negative sentiment.</p>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col items-center justify-center my-10 p-6 bg-blue-50 rounded-lg shadow-inner border border-dashed border-blue-400">
+                            <h4 class="text-blue-600 mb-6 text-2xl font-bold rounded-none">Overall Sentiment Meter for ${doc.fileName}</h4>
+                            <div class="sentiment-gauge-container">
+                                <div class="sentiment-gauge-needle" id="sentimentGaugeNeedle-${index}"></div>
+                                <div class="sentiment-gauge-labels">
+                                    <span>Bearish</span>
+                                    <span>Neutral</span>
+                                    <span>Bullish</span>
+                                </div>
+                                <div class="sentiment-score-display" id="sentimentScoreDisplay-${index}">--</div>
+                            </div>
+                            <p class="text-gray-600 text-sm mt-4 text-center">Score from 1 (Strongly Bearish) to 100 (Strongly Bullish)</p>
+                        </div>
+
+
+                        <div class="key-metrics mt-10">
+                            <h4 class="text-blue-600 text-2xl mb-6 text-center font-bold rounded-none">Key Metrics & Insights</h4>
+                            <div class="metric-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                                    <h5 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Overall Sentiment Score</h5>
+                                    <p class="text-gray-600 text-sm rounded-none"><strong>Score: ${doc.overallSentimentScore !== undefined ? parseFloat(doc.overallSentimentScore).toFixed(2) : 'N/A'}</strong></p>
+                                </div>
+                                <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                                    <h5 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Positive Word Count</h5>
+                                    <p class="text-gray-600 text-sm rounded-none"><strong>Count: ${doc.wordCounts.positive !== undefined ? parseFloat(doc.wordCounts.positive) : 'N/A'}</strong></p>
+                                </div>
+                                <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                                    <h5 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Negative Word Count</h5>
+                                    <p class="text-gray-600 text-sm rounded-none"><strong>Count: ${doc.wordCounts.negative !== undefined ? parseFloat(doc.wordCounts.negative) : 'N/A'}</strong></p>
+                                </div>
+                                <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                                    <h5 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Neutral Word Count</h5>
+                                    <p class="text-gray-600 text-sm rounded-none"><strong>Count: ${doc.wordCounts.neutral !== undefined ? parseFloat(doc.wordCounts.neutral) : 'N/A'}</strong></p>
+                                </div>
+                                <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                                    <h5 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Polarity Strength</h5>
+                                    <p class="text-gray-600 text-sm rounded-none"><strong>Strength: ${doc.polarityStrength !== undefined ? parseFloat(doc.polarityStrength).toFixed(2) : 'N/A'}</strong></p>
+                                </div>
+                                <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                                    <h5 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Subjectivity Score</h5>
+                                    <p class="text-gray-600 text-sm rounded-none"><strong>Score: ${doc.subjectivityScore !== undefined ? parseFloat(doc.subjectivityScore).toFixed(2) : 'N/A'}</strong></p>
+                                </div>
+                                <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                                    <h5 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Key Phrases (Bullish)</h5>
+                                    <p class="text-gray-600 text-sm rounded-none"><strong>Phrases: ${doc.keyPhrases.bullish && doc.keyPhrases.bullish.length > 0 ? doc.keyPhrases.bullish.join(', ') : 'N/A'}</strong></p>
+                                </div>
+                                <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                                    <h5 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Key Phrases (Bearish)</h5>
+                                    <p class="text-gray-600 text-sm rounded-none"><strong>Phrases: ${doc.keyPhrases.bearish && doc.keyPhrases.bearish.length > 0 ? doc.keyPhrases.bearish.join(', ') : 'N/A'}</strong></p>
+                                </div>
+                                <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                                    <h5 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Emotional Tone Breakdown</h5>
+                                    <p class="text-gray-600 text-sm rounded-none"><strong>Tones: ${doc.emotionalTone && doc.emotionalTone.OverallDescription ? doc.emotionalTone.OverallDescription : 'N/A'}</strong></p>
+                                </div>
+                                <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                                    <h5 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Readability Score</h5>
+                                    <p class="text-gray-600 text-sm rounded-none"><strong>Score: ${doc.readabilityScore !== undefined ? doc.readabilityScore : 'N/A'}</strong></p>
+                                </div>
+                                <div class="metric-card bg-white p-5 rounded-lg shadow-sm border-l-4 border-amber-500 transition-transform duration-300 ease-in-out hover:scale-[1.02]">
+                                    <h5 class="mt-0 text-xl text-blue-600 mb-2 font-semibold rounded-none">Word Count</h5>
+                                    <p class="text-gray-600 text-sm rounded-none"><strong>Count: ${doc.wordCounts.total !== undefined ? parseFloat(doc.wordCounts.total) : 'N/A'}</strong></p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="dynamic-llm-buttons flex gap-4 mt-6 justify-center flex-wrap">
+                            <button class="summarize-doc-btn px-6 py-3 bg-purple-600 text-white rounded-lg text-lg cursor-pointer transition-all duration-300 ease-in-out flex items-center gap-2 shadow-md hover:bg-purple-700 hover:scale-105">
+                                <i class="fas fa-file-alt rounded-none"></i> Summarize Document ✨
+                            </button>
+                            <button class="extract-themes-btn px-6 py-3 bg-indigo-600 text-white rounded-lg text-lg cursor-pointer transition-all duration-300 ease-in-out flex items-center gap-2 shadow-md hover:bg-indigo-700 hover:scale-105">
+                                <i class="fas fa-tags rounded-none"></i> Extract Key Themes ✨
+                            </button>
+                        </div>
+
+                        <div id="summarySection-${index}" class="hidden mt-10 p-8 bg-green-50 rounded-lg text-gray-800 border border-dashed border-green-400">
+                            <h4 class="text-green-600 mb-4 text-2xl font-bold rounded-none">Document Summary ✨</h4>
+                            <p class="document-summary-content text-lg leading-relaxed rounded-none">Summary will appear here.</p>
+                        </div>
+
+                        <div id="themesSection-${index}" class="hidden mt-10 p-8 bg-purple-50 rounded-lg text-gray-800 border border-dashed border-purple-400">
+                            <h4 class="text-purple-600 mb-4 text-2xl font-bold rounded-none">Key Themes ✨</h4>
+                            <ul class="key-themes-list list-disc list-inside text-lg leading-relaxed rounded-none">
+                                <li>Themes will appear here.</li>
+                            </ul>
+                        </div>
+
+                        <div class="raw-text-preview mt-10 p-6 bg-gray-50 border border-dashed border-gray-300 rounded-lg">
+                            <h4 class="text-blue-600 mb-4 text-xl font-bold rounded-none">Document Text Preview</h4>
+                            <textarea readonly class="w-full min-h-[150px] border border-gray-300 rounded-md p-3 font-mono text-sm resize-y bg-white shadow-inner">${doc.fileContent.substring(0, 2000) + (doc.fileContent.length > 2000 ? '...' : '')}</textarea>
+                        </div>
+                    `;
+                    individualAnalysisReportsContainer.appendChild(reportSection);
+
+                    // Update sentiment gauge for individual report
+                    const individualNeedle = document.getElementById(`sentimentGaugeNeedle-${index}`);
+                    const individualScoreDisplay = document.getElementById(`sentimentScoreDisplay-${index}`);
+                    updateSentimentGauge(doc.overallSentimentScore, individualNeedle, individualScoreDisplay);
+
+
+                    // Add event listeners for dynamic LLM buttons
+                    const summarizeBtn = reportSection.querySelector('.summarize-doc-btn');
+                    const extractThemesBtn = reportSection.querySelector('.extract-themes-btn');
+                    const summaryContent = reportSection.querySelector('.document-summary-content');
+                    const themesList = reportSection.querySelector('.key-themes-list');
+                    const summarySec = reportSection.querySelector(`#summarySection-${index}`);
+                    const themesSec = reportSection.querySelector(`#themesSection-${index}`);
+
+                    summarizeBtn.addEventListener('click', () => generateSummary(doc.fileContent, summaryContent, summarySec));
+                    extractThemesBtn.addEventListener('click', () => generateThemes(doc.fileContent, themesList, themesSec));
+                });
+            }
+
+
+            /**
+             * Adds the analysis result to the history list.
+             * @param {string} source - The source of the analysis (file name or "Pasted Text").
+             * @param {string} sentiment - The overall sentiment ("Bullish", "Neutral", "Bearish").
+             */
+            function addToHistory(source, sentiment) {
+                // Remove placeholder if it exists
+                const placeholder = analysisHistoryList.querySelector('li[style*="text-align: center"]');
+                if (placeholder) {
+                    placeholder.remove();
+                }
+
+                const listItem = document.createElement('li');
+                const now = new Date();
+                const dateString = now.toLocaleString('en-US', {
+                    year: 'numeric', month: 'short', day: 'numeric',
+                    hour: '2-digit', minute: '2-digit'
+                });
+
+                let sentimentColorClass = '';
+                if (sentiment === 'Bullish') sentimentColorClass = 'text-green-600';
+                else if (sentiment === 'Neutral') sentimentColorClass = 'text-amber-600';
+                else if (sentiment === 'Bearish') sentimentColorClass = 'text-red-600';
+
+                listItem.className = 'p-3 border-b border-gray-100 flex justify-between items-center text-base text-gray-800 last:border-b-0 rounded-none';
+                listItem.innerHTML = `
+                    <div>
+                        <span>${source}</span>
+                        <span class="text-sm text-gray-500 ml-2">${dateString}</span>
+                    </div>
+                    <span class="font-bold ${sentimentColorClass}">${sentiment}</span>
+                `;
+                analysisHistoryList.prepend(listItem); // Add to the top
+            }
+
+            // --- Export Results Button ---
+            exportResultsButton.addEventListener('click', () => {
+                // For multi-doc, we might want to export all results, not just currentAnalysisData
+                // This export logic needs to be updated if multi-doc export is desired.
+                if (currentAnalysisData) { // This still exports only the last single analysis data
+                    const dataStr = JSON.stringify(currentAnalysisData, null, 2);
+                    const blob = new Blob([dataStr], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'sentiment_analysis_results.json';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    showMessage('success', 'Analysis results exported as JSON!');
+                } else {
+                    showMessage('error', 'No analysis results to export.');
+                }
+            });
+
+            /**
+             * Clears all analysis output sections and resets the UI.
+             */
+            function clearAllAnalysisOutputs() {
+                // Hide all results sections
+                analysisResultsSection.classList.add('hidden');
+                comparisonResultsSection.classList.add('hidden');
+                individualAnalysisReportsContainer.classList.add('hidden');
+                exportResultsButton.classList.add('hidden');
+                clearAnalysisButton.classList.add('hidden');
+                messageBox.classList.add('hidden');
+
+                // Clear single doc sentiment scores and metrics
+                bullishScore.textContent = '--%';
+                neutralScore.textContent = '--%';
+                bearishScore.textContent = '--%';
+                overallSentimentScore.innerHTML = '<strong>Score: N/A</strong> - A composite score reflecting the document\'s general emotional tone.';
+                positiveWordCount.innerHTML = '<strong>Count: N/A</strong> - Number of words identified with a positive connotation.';
+                negativeWordCount.innerHTML = '<strong>Count: N/A</strong> - Number of words identified with a negative connotation.';
+                neutralWordCount.innerHTML = '<strong>Count: N/A</strong> - Number of words identified as neutral.';
+                polarityStrength.innerHTML = '<strong>Strength: N/A</strong> - Measures how strong the sentiment is.';
+                subjectivityScore.innerHTML = '<strong>Score: N/A</strong> - Indicates how subjective or objective the document is.';
+                bullishKeyPhrases.innerHTML = '<strong>Phrases: N/A</strong> - Short phrases or keywords that strongly contribute to the positive sentiment.';
+                bearishKeyPhrases.innerHTML = '<strong>Phrases: N/A</strong> - Short phrases or keywords that strongly contribute to the negative sentiment.';
+                emotionalTone.innerHTML = '<strong>Tones: N/A</strong> - Detailed breakdown of emotions detected.';
+                readabilityScore.innerHTML = '<strong>Score: N/A</strong> - Assesses the ease of understanding the text. ';
+                totalWordCount.innerHTML = '<strong>Count: N/A</strong> - Total number of words in the analyzed document/text.';
+                documentTextPreview.value = '';
+
+                // Clear single doc LLM output sections
+                documentSummary.textContent = 'Summary will appear here.';
+                summarySection.classList.add('hidden');
+                keyThemesList.innerHTML = '<li>Themes will appear here.</li>';
+                themesSection.classList.add('hidden');
+
+                // Clear comparison table
+                comparisonResultsBody.innerHTML = '';
+                comparisonSummary.textContent = '';
+
+                // Clear individual analysis reports container
+                individualAnalysisReportsContainer.innerHTML = '';
+
+                // Reset sentiment gauge
+                updateSentimentGauge(0, sentimentGaugeNeedle, sentimentScoreDisplay); // Reset to neutral (0 score)
+                // Also reset all dynamically created gauges for individual reports
+                document.querySelectorAll('[id^="sentimentGaugeNeedle-"]').forEach(needle => {
+                    const scoreDisplay = document.getElementById(needle.id.replace('Needle', 'ScoreDisplay'));
+                    updateSentimentGauge(0, needle, scoreDisplay);
+                });
+
+
+                currentAnalysisData = null; // Clear stored analysis data
+                currentDocumentText = ''; // Clear stored document text
+                uploadedFiles = []; // Clear uploaded files list
+                singleFileNameDisplay.textContent = ''; // Clear single file display
+                uploadedFilesList.innerHTML = ''; // Clear multi-file list
+                uploadedFilesList.classList.add('hidden'); // Hide multi-file list
+            }
+
+            // --- Clear Analysis Button ---
+            clearAnalysisButton.addEventListener('click', () => {
+                // Reset input area
+                textInputArea.value = '';
+                textInputArea.classList.add('hidden');
+                singleDocumentUpload.value = '';
+                multipleDocumentUpload.value = ''; // Clear multi-file input
+                uploadedFiles = []; // Clear uploaded files
+
+                clearAllAnalysisOutputs(); // Call the consolidated clear function
+                showMessage('info', 'Analysis cleared. Ready for new input.');
+            });
+
+            // Initial state setup: Default to single document upload
+            singleFileUploadCard.click();
+        });
+    </script>
+</body>
+</html>
